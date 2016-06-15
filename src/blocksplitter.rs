@@ -7,55 +7,40 @@ use Options;
 /// Finds minimum of function `f(i)` where `i` is of type `usize`, `f(i)` is of type
 /// `f64`, `i` is in range `start-end` (excluding `end`).
 /// Returns the index to the minimum and the minimum value.
+/// TODO pass Range, rather than start + end
 fn find_minimum<F>(f: F, start: usize, end: usize) -> (usize, f64)
     where F: Fn(usize) -> f64
 {
-    let mut start = start;
-    let mut end = end;
     if end - start < 1024 {
-        let mut best = f64::MAX;
-        let mut result = start;
-        for i in start..end {
-            let v = f(i);
-            if v < best {
-                best = v;
-                result = i;
-            }
-        }
-        (result, best)
+        let default = (start, f64::MAX);
+        (start..end).map(|i| (i, f(i))).fold(default, |a, b| if b.1 < a.1 { b } else { a })
     } else {
+        let mut start = start;
+        let mut end = end;
         /* Try to find minimum faster by recursively checking multiple points. */
-        let num = 9;  /* Good value: 9. ?!?!?!?! */
-        let mut p = vec![0; num];
-        let mut vp = vec![0.0; num];
-        let mut besti;
-        let mut best;
+        const NUM: usize = 9;  /* Good value: 9. ?!?!?!?! */
         let mut lastbest = f64::MAX;
         let mut pos = start;
 
-        while end - start > num {
-            for i in 0..num {
-                p[i] = start + (i + 1) * ((end - start) / (num + 1));
-                vp[i] = f(p[i]);
-            }
+        let default = (0, start, f64::MAX); // FIXME we don't actually need a default (how do we save one comparison?)
 
-            besti = 0;
-            best = vp[0];
+        while end - start > NUM {
+            let skip = (end - start) / (NUM + 1);
 
-            for (i, &item) in vp.iter().enumerate().take(num).skip(1) {
-                if item < best {
-                  best = item;
-                  besti = i;
-                }
-            }
+            let (besti, bestp, best) =
+                    (0..NUM).map(|i| {
+                        let p = start + (i + 1) * skip; // FIXME is this a bug? it never evaluates at start
+                        (i, p, f(p))
+                    }).fold(default, |a, b| if b.2 < a.2 { b } else { a });
+
             if best > lastbest {
                 break;
             }
 
-            start = if besti == 0 { start } else { p[besti - 1] };
-            end = if besti == num - 1 { end } else { p[besti + 1] };
+            start = if besti == 0 { start } else { bestp - skip };
+            end = if besti == NUM - 1 { end } else { bestp + skip };
 
-            pos = p[besti];
+            pos = bestp;
             lastbest = best;
         }
         (pos, lastbest)
