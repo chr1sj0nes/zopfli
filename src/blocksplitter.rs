@@ -1,4 +1,5 @@
 use std::f64;
+use std::iter;
 
 use deflate::calculate_block_size_auto_type;
 use lz77::{Lz77Store, ZopfliBlockState};
@@ -28,10 +29,10 @@ fn find_minimum<F>(f: F, start: usize, end: usize) -> (usize, f64)
             let skip = (end - start) / (NUM + 1);
 
             let (besti, bestp, best) =
-                    (0..NUM).map(|i| {
-                        let p = start + (i + 1) * skip; // FIXME is this a bug? it never evaluates at start
-                        (i, p, f(p))
-                    }).fold(default, |a, b| if b.2 < a.2 { b } else { a });
+                (0..NUM).map(|i| {
+                    let p = start + (i + 1) * skip; // FIXME is this a bug? it never evaluates at start
+                    (i, p, f(p))
+                }).fold(default, |a, b| if b.2 < a.2 { b } else { a });
 
             if best > lastbest {
                 break;
@@ -62,34 +63,15 @@ fn estimate_cost(lz77: &Lz77Store, lstart: usize, lend: usize) -> f64 {
 /// Finds next block to try to split, the largest of the available ones.
 /// The largest is chosen to make sure that if only a limited amount of blocks is
 /// requested, their sizes are spread evenly.
-/// lz77size: the size of the LL77 data, which is the size of the done array here.
 /// done: array indicating which blocks starting at that position are no longer
 ///     splittable (splitting them increases rather than decreases cost).
 /// splitpoints: the splitpoints found so far.
-/// npoints: the amount of splitpoints found so far.
-/// lstart: output variable, giving start of block.
-/// lend: output variable, giving end of block.
-/// returns 1 if a block was found, 0 if no block found (all are done).
-fn find_largest_splittable_block(lz77size: usize, done: &[u8], splitpoints: &[usize]) -> Option<(usize, usize)> {
-    let mut longest = 0;
-    let mut found = None;
-
-    let mut last = 0;
-
-    for &item in splitpoints.iter() {
-        if done[last] == 0 && item - last > longest {
-            found = Some((last, item));
-            longest = item - last;
-        }
-        last = item;
-    }
-
-    let end = lz77size - 1;
-    if done[last] == 0 && end - last > longest {
-        found = Some((last, end));
-    }
-
-    found
+fn find_largest_splittable_block(done: &[bool], splitpoints: &[usize]) -> Option<(usize, usize)> {
+    splitpoints.iter()
+    .map(|a| *a).chain(iter::once(done.len() - 1))
+    .scan(0, |prev, a| { let r = Some((*prev, a)); *prev = a; r })
+    .filter(|&(a, _)| !done[a])
+    .max_by_key(|&(a, b)| b - a)
 }
 
 /// Prints the block split points as decimal and hex values in the terminal.
@@ -134,7 +116,7 @@ pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize, sp
     let mut numblocks = 1;
     let mut splitcost;
     let mut origcost;
-    let mut done = vec![0; lz77.size()];
+    let mut done = vec![false; lz77.size()];
     let mut lstart = 0;
     let mut lend = lz77.size();
 
@@ -150,7 +132,7 @@ pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize, sp
         origcost = estimate_cost(lz77, lstart, lend);
 
         if splitcost > origcost || llpos == lstart + 1 || llpos == lend {
-            done[lstart] = 1;
+            done[lstart] = true;
         } else {
             splitpoints.push(llpos);
             splitpoints.sort();
@@ -159,7 +141,7 @@ pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize, sp
 
         // If `find_largest_splittable_block` returns `None`, no further split will
         // likely reduce compression.
-        let is_finished = find_largest_splittable_block(lz77.size(), &done, splitpoints)
+        let is_finished = find_largest_splittable_block(&done, splitpoints)
             .map_or(true, |(start, end)| {
                 lstart = start;
                 lend = end;
