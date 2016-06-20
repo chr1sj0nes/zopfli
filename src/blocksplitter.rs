@@ -9,7 +9,6 @@ use Options;
 /// Finds minimum of function `f(i)` where `i` is of type `usize`, `f(i)` is of type
 /// `f64`, `i` is in specified range.
 /// Returns the index to the minimum and the minimum value.
-/// TODO pass Range, rather than start + end
 fn find_minimum<F>(f: F, range: Range<usize>) -> (usize, f64)
     where F: Fn(usize) -> f64
 {
@@ -73,17 +72,18 @@ fn find_largest_splittable_block(done: &[bool], splitpoints: &[usize]) -> Option
 /// Prints the block split points as decimal and hex values in the terminal.
 fn print_block_split_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) {
     let splitpoints = compressed_to_uncompressed_points(lz77, lz77splitpoints);
-    println!("block split points: {} (hex: {})", splitpoints.iter().map(|&sp| format!("{}", sp)).collect::<Vec<_>>().join(" "), splitpoints.iter().map(|&sp| format!("{:x}", sp)).collect::<Vec<_>>().join(" "));
+    println!("block split points: {} (hex: {})",
+        splitpoints.iter().map(|&sp| format!("{}", sp)).collect::<Vec<_>>().join(" "),
+        splitpoints.iter().map(|&sp| format!("{:x}", sp)).collect::<Vec<_>>().join(" "));
 }
 
 fn compressed_to_uncompressed_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) -> Vec<usize> {
     let nlz77points = lz77splitpoints.len();
     let mut splitpoints = Vec::with_capacity(nlz77points);
 
-    /* The input is given as lz77 indices, but we want to see the uncompressed
-    index values. */
-    let mut pos = 0;
+    /* The input is given as lz77 indices, but we want to see the uncompressed index values. */
     if nlz77points > 0 {
+        let mut pos = 0;
         for (i, item) in lz77.litlens.iter().enumerate() {
             if lz77splitpoints[splitpoints.len()] == i {
                 splitpoints.push(pos);
