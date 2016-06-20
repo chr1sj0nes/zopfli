@@ -76,6 +76,11 @@ fn find_largest_splittable_block(done: &[bool], splitpoints: &[usize]) -> Option
 
 /// Prints the block split points as decimal and hex values in the terminal.
 fn print_block_split_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) {
+    let splitpoints = compressed_to_uncompressed_points(lz77, lz77splitpoints);
+    println!("block split points: {} (hex: {})", splitpoints.iter().map(|&sp| format!("{}", sp)).collect::<Vec<_>>().join(" "), splitpoints.iter().map(|&sp| format!("{:x}", sp)).collect::<Vec<_>>().join(" "));
+}
+
+fn compressed_to_uncompressed_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) -> Vec<usize> {
     let nlz77points = lz77splitpoints.len();
     let mut splitpoints = Vec::with_capacity(nlz77points);
 
@@ -84,19 +89,17 @@ fn print_block_split_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) {
     let mut pos = 0;
     if nlz77points > 0 {
         for (i, item) in lz77.litlens.iter().enumerate() {
-            let length = item.size();
             if lz77splitpoints[splitpoints.len()] == i {
                 splitpoints.push(pos);
                 if splitpoints.len() == nlz77points {
                     break;
                 }
             }
-            pos += length;
+            pos += item.size();
         }
     }
     assert!(splitpoints.len() == nlz77points);
-
-    println!("block split points: {} (hex: {})", splitpoints.iter().map(|&sp| format!("{}", sp)).collect::<Vec<_>>().join(" "), splitpoints.iter().map(|&sp| format!("{:x}", sp)).collect::<Vec<_>>().join(" "));
+    splitpoints
 }
 
 /// Does blocksplitting on LZ77 data.
@@ -167,22 +170,5 @@ pub fn blocksplit(options: &Options, in_data: &[u8], instart: usize, inend: usiz
         store.greedy(&mut state, in_data, instart, inend);
     }
 
-    let lz77splitpoints = blocksplit_lz77(options, &store, maxblocks);
-    let mut splitpoints = Vec::with_capacity(maxblocks);
-
-    /* Convert LZ77 positions to positions in the uncompressed input. */
-    let mut pos = instart;
-    if lz77splitpoints.len() > 0 {
-        for (i, item) in store.litlens.iter().enumerate() {
-            if lz77splitpoints[splitpoints.len()] == i {
-                splitpoints.push(pos);
-                if splitpoints.len() == lz77splitpoints.len() {
-                    break;
-                }
-            }
-            pos += item.size();
-        }
-    }
-    assert!(splitpoints.len() == lz77splitpoints.len());
-    splitpoints
+    compressed_to_uncompressed_points(&store, &blocksplit_lz77(options, &store, maxblocks))
 }
