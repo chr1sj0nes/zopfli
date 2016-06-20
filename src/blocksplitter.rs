@@ -106,42 +106,37 @@ fn print_block_split_points(lz77: &Lz77Store, lz77splitpoints: &[usize]) {
 /// Does blocksplitting on LZ77 data.
 /// The output splitpoints are indices in the LZ77 data.
 /// maxblocks: set a limit to the amount of blocks. Set to 0 to mean no limit.
-pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize, splitpoints: &mut Vec<usize>) {
+pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize) -> Vec<usize> {
+    let mut splitpoints = Vec::with_capacity(maxblocks);
 
     if lz77.size() < 10 {
-        return;  /* This code fails on tiny files. */
+        return splitpoints; /* This code fails on tiny files. */
     }
 
-    let mut llpos;
-    let mut numblocks = 1;
-    let mut splitcost;
-    let mut origcost;
     let mut done = vec![false; lz77.size()];
     let mut lstart = 0;
     let mut lend = lz77.size();
 
-    while maxblocks != 0 && numblocks < maxblocks {
+    while maxblocks == 0 || splitpoints.len() < (maxblocks - 1) {
         assert!(lstart < lend);
-        let find_minimum_result = find_minimum(|i| estimate_cost(lz77, lstart, i) + estimate_cost(lz77, i, lend), lstart + 1, lend);
-        llpos = find_minimum_result.0;
-        splitcost = find_minimum_result.1;
+        let (llpos, splitcost) =
+            find_minimum(|i| estimate_cost(lz77, lstart, i) + estimate_cost(lz77, i, lend), lstart + 1, lend);
 
         assert!(llpos > lstart);
         assert!(llpos < lend);
 
-        origcost = estimate_cost(lz77, lstart, lend);
+        let origcost = estimate_cost(lz77, lstart, lend);
 
         if splitcost > origcost || llpos == lstart + 1 || llpos == lend {
             done[lstart] = true;
         } else {
             splitpoints.push(llpos);
             splitpoints.sort();
-            numblocks += 1;
         }
 
         // If `find_largest_splittable_block` returns `None`, no further split will
         // likely reduce compression.
-        let is_finished = find_largest_splittable_block(&done, splitpoints)
+        let is_finished = find_largest_splittable_block(&done, &splitpoints)
             .map_or(true, |(start, end)| {
                 lstart = start;
                 lend = end;
@@ -152,26 +147,22 @@ pub fn blocksplit_lz77(options: &Options, lz77: &Lz77Store, maxblocks: usize, sp
     }
 
     if options.verbose {
-        print_block_split_points(lz77, splitpoints);
+        print_block_split_points(lz77, &splitpoints);
     }
+
+    splitpoints
 }
 
 /// Does blocksplitting on uncompressed data.
 /// The output splitpoints are indices in the uncompressed bytes.
 ///
 /// options: general program options.
-/// in: uncompressed input data
+/// in_data: uncompressed input data
 /// instart: where to start splitting
 /// inend: where to end splitting (not inclusive)
 /// maxblocks: maximum amount of blocks to split into, or 0 for no limit
-/// splitpoints: dynamic array to put the resulting split point coordinates into.
-///   The coordinates are indices in the input array.
-/// npoints: pointer to amount of splitpoints, for the dynamic array. The amount of
-///   blocks is the amount of splitpoitns + 1.
-pub fn blocksplit(options: &Options, in_data: &[u8], instart: usize, inend: usize, maxblocks: usize, splitpoints: &mut Vec<usize>) {
-    let mut lz77splitpoints = Vec::with_capacity(maxblocks);
+pub fn blocksplit(options: &Options, in_data: &[u8], instart: usize, inend: usize, maxblocks: usize) -> Vec<usize> {
     let mut store = Lz77Store::new();
-    splitpoints.clear();
 
     /* Unintuitively, Using a simple LZ77 method here instead of lz77_optimal
     results in better blocks. */
@@ -180,23 +171,23 @@ pub fn blocksplit(options: &Options, in_data: &[u8], instart: usize, inend: usiz
         store.greedy(&mut state, in_data, instart, inend);
     }
 
-    blocksplit_lz77(options, &store, maxblocks, &mut lz77splitpoints);
-
-    let nlz77points = lz77splitpoints.len();
+    let lz77splitpoints = blocksplit_lz77(options, &store, maxblocks);
+    let mut splitpoints = Vec::with_capacity(maxblocks);
 
     /* Convert LZ77 positions to positions in the uncompressed input. */
     let mut pos = instart;
-    if nlz77points > 0 {
+    if lz77splitpoints.len() > 0 {
         for i in 0..store.size() {
-            let length = if store.dists[i] == 0 { 1 } else { store.litlens[i] };
             if lz77splitpoints[splitpoints.len()] == i {
                 splitpoints.push(pos);
-                if splitpoints.len() == nlz77points {
+                if splitpoints.len() == lz77splitpoints.len() {
                     break;
                 }
             }
+            let length = if store.dists[i] == 0 { 1 } else { store.litlens[i] };
             pos += length as usize;
         }
     }
-    assert!(splitpoints.len() == nlz77points);
+    assert!(splitpoints.len() == lz77splitpoints.len());
+    splitpoints
 }

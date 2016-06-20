@@ -766,9 +766,9 @@ fn blocksplit_attempt(options: &Options, final_block: bool, in_data: &[u8], inst
     let mut lz77 = Lz77Store::new();
 
     /* byte coordinates rather than lz77 index */
-    let mut splitpoints_uncompressed = Vec::with_capacity(options.blocksplittingmax as usize);
+    let splitpoints_uncompressed =
+        blocksplit(options, in_data, instart, inend, options.blocksplittingmax as usize);
 
-    blocksplit(options, in_data, instart, inend, options.blocksplittingmax as usize, &mut splitpoints_uncompressed);
     let npoints = splitpoints_uncompressed.len();
     let mut splitpoints = Vec::with_capacity(npoints);
 
@@ -803,10 +803,9 @@ fn blocksplit_attempt(options: &Options, final_block: bool, in_data: &[u8], inst
 
     /* Second block splitting attempt */
     if npoints > 1 {
-        let mut splitpoints2 = Vec::with_capacity(splitpoints_uncompressed.len());
         let mut totalcost2 = 0.0;
 
-        blocksplit_lz77(options, &lz77, options.blocksplittingmax as usize, &mut splitpoints2);
+        let splitpoints2 = blocksplit_lz77(options, &lz77, options.blocksplittingmax as usize);
 
         let mut last = 0;
         for &item in &splitpoints2 {
