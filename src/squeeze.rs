@@ -7,13 +7,12 @@
 //! multiple runs are done with updated cost models to converge to a better
 //! solution.
 
-use std::{mem, cmp, f64, f32};
+use std::{cmp, f64, f32};
 
-use libc::malloc;
-
+use cache::Cache;
 use deflate::{calculate_block_size, BlockType};
 use hash::ZopfliHash;
-use lz77::{Lz77Store, ZopfliBlockState, Cache, find_longest_match};
+use lz77::{Lz77Store, ZopfliBlockState, find_longest_match, LitLen};
 use symbols::{get_dist_extra_bits, get_dist_symbol, get_length_extra_bits, get_length_symbol};
 use util::{ZOPFLI_NUM_LL, ZOPFLI_NUM_D, ZOPFLI_WINDOW_SIZE, ZOPFLI_WINDOW_MASK, ZOPFLI_MAX_MATCH};
 
@@ -169,13 +168,13 @@ impl SymbolStats {
 
     /// Appends the symbol statistics from the store.
     fn get_statistics(&mut self, store: &Lz77Store) {
-        for i in 0..store.dists.len() {
-            let store_litlens_usize = store.litlens[i] as usize;
-            if store.dists[i] == 0 {
-                self.litlens[store_litlens_usize] += 1;
-            } else {
-                self.litlens[get_length_symbol(store_litlens_usize) as usize] +=1 ;
-                self.dists[get_dist_symbol(store.dists[i] as i32) as usize] += 1;
+        for &litlen in store.litlens.iter() {
+            match litlen {
+                LitLen::Literal(lit) => self.litlens[lit as usize] += 1,
+                LitLen::LengthDist(len, dist) => {
+                    self.litlens[get_length_symbol(len as usize) as usize] += 1;
+                    self.dists[get_dist_symbol(dist as i32) as usize] += 1;
+                }
             }
         }
         self.litlens[256] = 1;  /* End symbol. */
@@ -260,19 +259,9 @@ fn get_best_lengths<F, C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: 
     if instart == inend {
         return (0.0, length_array);
     }
-    let mut leng;
-    let mut longest_match;
-    let sublen = unsafe { malloc(mem::size_of::<u16>() * 259) as *mut u16 };
-    let windowstart = if instart > ZOPFLI_WINDOW_SIZE {
-        instart - ZOPFLI_WINDOW_SIZE
-    } else {
-        0
-    };
+    let windowstart = instart.saturating_sub(ZOPFLI_WINDOW_SIZE);
 
-    let mincost = get_cost_model_min_cost(&costmodel);
-
-    h.reset(ZOPFLI_WINDOW_SIZE);
-
+    h.reset();
     let arr = &in_data[..inend];
     h.warmup(arr, windowstart, inend);
     for i in windowstart..instart {
@@ -280,14 +269,18 @@ fn get_best_lengths<F, C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: 
     }
 
     costs.resize(blocksize + 1, 0.0);
-
     for cost in costs.iter_mut().take(blocksize + 1).skip(1) {
         *cost = f32::MAX;
     }
     costs[0] = 0.0; /* Because it's the start. */
+
     length_array[0] = 0;
 
     let mut i = instart;
+    let mut leng;
+    let mut longest_match;
+    let mut sublen = vec![0; ZOPFLI_MAX_MATCH + 1];
+    let mincost = get_cost_model_min_cost(&costmodel);
     while i < inend {
         let mut j = i - instart;  // Index in the costs array and length_array.
         h.update(arr, i);
@@ -313,7 +306,7 @@ fn get_best_lengths<F, C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: 
             }
         }
 
-        longest_match = find_longest_match(s, h, arr, i, inend, ZOPFLI_MAX_MATCH, sublen);
+        longest_match = find_longest_match(s, h, arr, i, inend, ZOPFLI_MAX_MATCH, &mut Some(&mut sublen));
         leng = longest_match.length;
 
         // Literal.
@@ -336,7 +329,7 @@ fn get_best_lengths<F, C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: 
                 continue;
             }
 
-            let new_cost = costmodel(k as u32, unsafe { *sublen.offset(k as isize) } as u32) + costs[j] as f64;
+            let new_cost = costmodel(k as u32, sublen[k] as u32) + costs[j] as f64;
             assert!(new_cost >= 0.0);
             if new_cost < costs[j + k] as f64 {
                 assert!(k <= ZOPFLI_MAX_MATCH);
@@ -350,7 +343,6 @@ fn get_best_lengths<F, C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: 
     assert!(costs[blocksize] >= 0.0);
     (costs[blocksize] as f64, length_array)
 }
-
 
 /// Calculates the optimal path of lz77 lengths to use, from the calculated
 /// `length_array`. The `length_array` must contain the optimal length to reach that
@@ -413,7 +405,7 @@ pub fn lz77_optimal_fixed<C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instar
 {
     s.blockstart = instart;
     s.blockend = inend;
-    let mut h = ZopfliHash::new(ZOPFLI_WINDOW_SIZE);
+    let mut h = ZopfliHash::new();
     let mut costs = Vec::with_capacity(inend - instart - 1);
     lz77_optimal_run(s, in_data, instart, inend, get_cost_fixed, store, &mut h, &mut costs);
 }
@@ -424,15 +416,18 @@ pub fn lz77_optimal_fixed<C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instar
 pub fn lz77_optimal<C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: usize, inend: usize, numiterations: i32) -> Lz77Store
     where C: Cache,
 {
-
-    let mut h = ZopfliHash::new(ZOPFLI_WINDOW_SIZE);
-    let mut costs = Vec::with_capacity(inend - instart + 1);
-
     /* Dist to get to here with smallest cost. */
     let mut currentstore = Lz77Store::new();
     let mut outputstore = currentstore.clone();
 
+    /* Initial run. */
+    currentstore.greedy(s, in_data, instart, inend);
     let mut stats = SymbolStats::default();
+    stats.get_statistics(&currentstore);
+
+    let mut h = ZopfliHash::new();
+    let mut costs = Vec::with_capacity(inend - instart + 1);
+
     let mut beststats = SymbolStats::default();
 
     let mut bestcost = f64::MAX;
@@ -443,11 +438,6 @@ pub fn lz77_optimal<C>(s: &mut ZopfliBlockState<C>, in_data: &[u8], instart: usi
 
     /* Do regular deflate, then loop multiple shortest path runs, each time using
     the statistics of the previous run. */
-
-    /* Initial run. */
-    currentstore.greedy(s, in_data, instart, inend);
-    stats.get_statistics(&currentstore);
-
     /* Repeat statistics with each time the cost model from the previous stat
     run. */
     for i in 0..numiterations {

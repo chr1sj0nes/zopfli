@@ -1,18 +1,18 @@
 [package]
 name = "zopfli"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Carol (Nichols || Goulding) <carol.nichols@gmail.com>"]
 description = "A Rust implementation of the Zopfli compression algorithm."
 license = "Apache-2.0"
 keywords = ["compression"]
 homepage = "https://github.com/carols10cents/zopfli"
 repository = "https://github.com/carols10cents/zopfli"
-readme = "README"
+readme = "README.md"
 
 [dependencies]
-libc = "0.2"
 crc = "1.2"
 adler32 = "0.2"
+byteorder = "0.5.3"
 
 [profile.release]
 debug = true
