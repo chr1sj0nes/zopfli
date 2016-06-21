@@ -1,11 +1,10 @@
-use std::cmp::Ordering;
-use std::{mem};
+use std::{iter, mem};
 
 // Bounded package merge algorithm, based on the paper
 // "A Fast and Space-Economical Algorithm for Length-Limited Coding
 // Jyrki Katajainen, Alistair Moffat, Andrew Turpin".
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node {
     weight: usize,
     leaf_counts: Vec<usize>,
@@ -13,12 +12,10 @@ struct Node {
 
 impl Node {
     fn new(weight: usize, initial_count: usize, capacity: usize) -> Node {
-        let mut n = Node {
+        Node {
             weight: weight,
-            leaf_counts: Vec::with_capacity(capacity),
-        };
-        n.leaf_counts.push(initial_count);
-        n
+            leaf_counts: { let mut v = Vec::with_capacity(capacity); v.push(initial_count); v }
+        }
     }
 }
 
@@ -27,79 +24,49 @@ struct Leaf {
     weight: usize,
     index: usize,
 }
-impl PartialEq for Leaf {
-    fn eq(&self, other: &Self) -> bool {
-        self.weight == other.weight
-    }
-}
-impl Eq for Leaf { }
-impl Ord for Leaf {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.weight.cmp(&other.weight)
-    }
-}
-impl PartialOrd for Leaf {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct List {
     lookahead1: Node,
     lookahead2: Node,
     next_leaf_index: usize,
 }
 
-/// Calculates the bitlengths for the Huffman tree, based on the counts of each
-/// symbol.
+/// Calculates the bitlengths for the Huffman tree, based on the counts of each symbol.
 pub fn length_limited_code_lengths(frequencies: &[usize], maxbits: i32) -> Vec<u32> {
-    let mut leaves = vec![];
-
-    // Count used symbols and place them in the leaves.
-    for (i, &freq) in frequencies.iter().enumerate() {
-        if freq != 0 {
-            leaves.push(Leaf { weight: freq, index: i });
-        }
-    }
+    let mut leaves =
+        frequencies.iter().enumerate()
+        .filter(|&(_, &freq)| freq != 0)
+        .map(|(i, &freq)| Leaf { weight: freq, index: i })
+        .collect::<Vec<_>>();
 
     // Short circuit some special cases
-    if leaves.is_empty() {
-        // There are no non-zero frequencies.
-        return vec![0; frequencies.len()];
-    }
-    if leaves.len() == 1 {
-        let mut result = vec![0; frequencies.len()];
-        result[leaves[0].index] = 1;
-        return result;
-    }
-    if leaves.len() == 2 {
-        let mut result = vec![0; frequencies.len()];
-        result[leaves[0].index] = 1;
-        result[leaves[1].index] = 1;
-        return result;
+    match leaves.len() {
+        0 => return vec![0; frequencies.len()],
+        1 => {
+            let mut result = vec![0; frequencies.len()];
+            result[leaves[0].index] = 1;
+            return result;
+        },
+        2 => {
+            let mut result = vec![0; frequencies.len()];
+            result[leaves[0].index] = 1;
+            result[leaves[1].index] = 1;
+            return result;
+        },
+        _ => (), // continue
     }
 
     // Sort the leaves from least frequent to most frequent.
-    // Add index into the same variable for stable sorting.
-    for leaf in &mut leaves {
-        leaf.weight = (leaf.weight << 9) | leaf.index;
-    }
-    leaves.sort();
-    for leaf in &mut leaves {
-        leaf.weight >>= 9;
-    }
+    leaves.sort_by_key(|l| l.weight);
 
     let max_num_leaves = 2 * leaves.len() - 2;
-
-    let mut lists = Vec::with_capacity(maxbits as usize);
-    for _ in 0..maxbits {
-        lists.push(List {
+    let mut lists =
+        iter::repeat(List {
             lookahead1: Node::new(leaves[0].weight, 1, max_num_leaves),
             lookahead2: Node::new(leaves[1].weight, 2, max_num_leaves),
             next_leaf_index: 2,
-        });
-    }
+        }).take(maxbits as usize).collect::<Vec<_>>();
 
     // In the last list, 2 * numsymbols - 2 active chains need to be created. Two
     // are already created in the initialization. Each boundary_pm run creates one.
@@ -128,17 +95,15 @@ pub fn length_limited_code_lengths(frequencies: &[usize], maxbits: i32) -> Vec<u
 fn lowest_list(lists: &mut [List], leaves: &[Leaf]) {
     // We're in the lowest list, just add another leaf to the lookaheads
     // There will always be more leaves to be added on level 0 so this is safe.
-    let mut current_list = lists.get_mut(0).unwrap();
+    let current_list = lists.first_mut().unwrap();
     let next_leaf = &leaves[current_list.next_leaf_index];
     current_list.lookahead2.weight = next_leaf.weight;
-
     current_list.lookahead2.leaf_counts[0] = current_list.lookahead1.leaf_counts.last().unwrap() + 1;
     current_list.next_leaf_index += 1;
 }
 
 fn next_leaf(lists: &mut [List], leaves: &[Leaf], current_list_index: usize) {
-    let mut current_list = lists.get_mut(current_list_index).unwrap();
-
+    let current_list = &mut lists[current_list_index];
     // The next leaf goes next; counting itself makes the leaf_count increase by one.
     current_list.lookahead2.weight = leaves[current_list.next_leaf_index].weight;
     current_list.lookahead2.leaf_counts.clear();
@@ -190,7 +155,7 @@ fn boundary_pm(lists: &mut [List], leaves: &[Leaf], current_list_index: usize) {
     } else {
         // We're at a list other than the lowest list.
         let weight_sum = {
-            let previous_list = lists.get(current_list_index - 1).unwrap();
+            let previous_list = &lists[current_list_index - 1];
             previous_list.lookahead1.weight + previous_list.lookahead2.weight
         };
 
